@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jarvis-osx-api"
+version = "0.1.0"
+description = "Jarvis macOS personal-data bridge: iMessage, Contacts, Shortcuts (native-only, port 7723)"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "httpx",
+    "python-dotenv",
+    "jarvis-config-client @ git+https://github.com/alexberardi/jarvis-config-client.git@fea99b55",
+    "jarvis-log-client @ git+https://github.com/alexberardi/jarvis-log-client.git@c2f8e82",
+]
+
+[project.optional-dependencies]
+contacts = ["pyobjc-framework-Contacts"]
+dev = ["pytest", "pytest-asyncio", "pytest-cov"]
+
+[tool.setuptools]
+py-modules = ["main", "cli", "version"]
+
+[tool.setuptools.packages.find]
+include = ["api*", "auth*", "config*", "models*", "services*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
