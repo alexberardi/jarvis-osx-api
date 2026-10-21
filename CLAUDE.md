@@ -29,9 +29,18 @@ behavior; the locked decisions there are binding.
    explicitly refused, not attempted.
 5. **Auth is self-contained.** Locally-minted scoped bearer keys
    (`auth/api_keys.py`, `python cli.py generate-api-key`), SHA-256-hashed at
-   rest, raw shown once. No jarvis-auth round-trip on any request path. Scopes:
-   `messages:read`, `messages:send`, `contacts:read`, `shortcuts:run` —
-   read ≠ send is the point; keep them separate.
+   rest, raw shown once. No jarvis-auth round-trip on any request path.
+   **Two classes of key over one store (PRD decision #15):**
+   - *speaker-bound* — `messages:read`, `messages:send`, `contacts:read`,
+     `shortcuts:run`. Reach a specific person's data; keep decision #9's
+     speaker binding. read ≠ send is the point; keep them separate.
+   - *service* — `ocr:read`. Impersonal capability, no speaker involved, held
+     by infrastructure (jarvisd on Linux; formerly jarvis-ocr-service).
+
+   A key may hold scopes from **exactly one class** — `generate()` refuses to
+   mint a mixed key and `require_scope` re-checks the class on every request.
+   That split is the containment guarantee: a compromised `ocr:read` key cannot
+   read a single message. Do not widen it for convenience.
 6. **Message bodies stay out of logs.** JarvisLogger events carry metadata only
    (chat ids, counts, durations). Never log message text.
 
@@ -63,6 +72,7 @@ Logs (launchd mode): `~/Library/Logs/jarvis-osx-api/{out,err}.log`.
 | POST | `/v1/messages/send` | `messages:send` |
 | GET | `/v1/contacts/resolve?query=` | `contacts:read` |
 | POST | `/v1/shortcuts/run` | `shortcuts:run` |
+| POST | `/v1/ocr` | `ocr:read` *(service key)* |
 
 `{chat_id}` accepts a chat GUID or a numeric chat ROWID. Send accepts
 `chat_id` or `handle` (handle must resolve to an existing 1:1 chat).
@@ -74,6 +84,26 @@ GUIDs *after actually speaking them*; the ledger auto-prunes entries once the
 message is read on another device. This ledger is the one deliberate exception
 to the service's statelessness.
 
+**OCR (`/v1/ocr`, PRD decision #15/#16):** Apple Vision text recognition, exposed
+so a **Linux** host can use it — jarvisd's `apple_vision` engine (`JARVIS_OSX_API_URL`)
+calls it, because Vision cannot be a library dependency on prod. On
+photographed cookbook pages it scored 100% ingredient-line recall at ~1.6 s/image
+against 75.4% for the best Linux-capable provider, which is the whole reason this
+endpoint exists.
+
+Deliberately dumb: one image in, text + positioned blocks out. **Batching and
+tier fallback belong to jarvis-ocr-service** — this service owns stateless
+capability endpoints, not orchestration. Bboxes are normalized `[x,y,w,h]` with a
+**top-left** origin (Vision's native origin is bottom-left; the flip happens in
+`services/vision_ocr.py`) and the response names the convention in `bbox_format`
+so a consumer cannot silently read them as pixels.
+
+Failure semantics matter more than usual here: a recognizer error returns **502**,
+never a 200 with empty text. jarvis-ocr-service reads an exception as "try the
+next tier", but an empty success reads as "this page had no text" and gets
+accepted. Four separate silent-fallback bugs were found in that pipeline on
+2026-08-23; this is the guard against a fifth.
+
 ---
 
 ## Architecture
@@ -81,7 +111,7 @@ to the service's statelessness.
 ```
 main.py                 # FastAPI wiring + optional jarvis config/log client init
 cli.py                  # generate/list/revoke API keys
-api/                    # routes: message_routes, contact_routes, shortcut_routes, health_routes
+api/                    # routes: message_routes, contact_routes, shortcut_routes, ocr_routes, health_routes
 auth/                   # api_keys.py (store) + dependencies.py (require_scope)
 services/
   chat_db.py            # read-only chat.db queries (unread/thread/style-context/verify_sent)
@@ -91,8 +121,11 @@ services/
   contacts.py           # pyobjc Contacts (graceful when unavailable/denied)
   shortcuts.py          # `shortcuts run` subprocess wrapper
   sanitize.py           # attachments → "[an image]", URLs → "[a link]"
+  vision_ocr.py         # Apple Vision text recognition (no TCC needed — see gotchas)
 config/settings.py      # env-overridable paths (CHAT_DB_PATH, OSX_API_DATA_DIR)
-tests/                  # 88 tests, all runnable without TCC grants (fixture chat.db)
+tests/                  # 107 tests; all runnable without TCC grants (fixture chat.db).
+                        # The Vision tests skip off macOS; tests/data/ocr_sample.png
+                        # is the real-device fixture.
 ```
 
 Env vars: `OSX_API_PORT` (7723), `SERVER_HOST`, `CHAT_DB_PATH`,
@@ -108,6 +141,13 @@ no settings-DB — deliberately self-contained.
   upgrading Python silently revokes FDA/Automation/Contacts. `/health` will
   show it (`messages_db: unreadable`), but remember: venv rebuild ⇒ redo the
   TCC ceremony.
+- **Vision needs no TCC grant and no GUI session** — unlike every other
+  capability here, OCR is pure local image processing (verified: runs from a
+  plain venv python with zero permission prompts). So `/health` has nothing to
+  probe for it, and an OCR-only deployment on a headless Mac is viable even
+  though iMessage still requires the logged-in GUI session of hard rule 1.
+  Needs the `vision` extra (`pip install -e ".[vision]"` →
+  `pyobjc-framework-Vision`); without it `/v1/ocr` returns 503, not a wrong answer.
 - **Automation permission is not probeable** without triggering a real send —
   `/health` reports `automation: "unknown"`. Setup includes a one-time test
   send to yourself.

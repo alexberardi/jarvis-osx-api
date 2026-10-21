@@ -18,6 +18,7 @@ dependencies = [
 
 [project.optional-dependencies]
 contacts = ["pyobjc-framework-Contacts"]
+vision = ["pyobjc-framework-Vision"]
 dev = ["pytest", "pytest-asyncio", "pytest-cov"]
 
 [tool.setuptools]

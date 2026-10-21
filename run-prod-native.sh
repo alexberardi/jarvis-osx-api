@@ -43,7 +43,7 @@ fi
 [ -d "$VENV" ] || "$PYBIN" -m venv "$VENV"
 
 if [ ! -f "$SENTINEL" ] || [ "$ROOT/pyproject.toml" -nt "$SENTINEL" ]; then
-    "$VENV/bin/pip" install -q -e "$ROOT[contacts]"
+    "$VENV/bin/pip" install -q -e "$ROOT[contacts,vision]"
     touch "$SENTINEL"
 fi
 

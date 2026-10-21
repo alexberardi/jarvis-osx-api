@@ -17,7 +17,28 @@ from pathlib import Path
 from config import settings
 
 KEY_PREFIX = "joxk_"
-VALID_SCOPES = frozenset({"messages:read", "messages:send", "contacts:read", "shortcuts:run"})
+
+# Two classes of scope, and therefore two classes of key (PRD decision #15).
+#
+# SPEAKER scopes reach a specific person's data and keep decision #9's binding:
+# the key belongs to an enrolled speaker, and no speaker secret means refusal.
+# SERVICE scopes reach impersonal capabilities where there IS no speaker — the
+# caller is infrastructure and the input is something it already holds.
+#
+# A key may hold scopes from exactly ONE class. That is the whole containment
+# guarantee: jarvis-ocr-service holding an `ocr:read` key cannot read a single
+# message, and a compromise of it never becomes a compromise of iMessage.
+SPEAKER_SCOPES = frozenset({"messages:read", "messages:send", "contacts:read", "shortcuts:run"})
+SERVICE_SCOPES = frozenset({"ocr:read"})
+VALID_SCOPES = SPEAKER_SCOPES | SERVICE_SCOPES
+
+
+def class_of_scope(scope: str) -> str | None:
+    if scope in SPEAKER_SCOPES:
+        return "speaker"
+    if scope in SERVICE_SCOPES:
+        return "service"
+    return None
 
 
 class InvalidScopeError(ValueError):
@@ -33,6 +54,13 @@ class ApiKey:
 
     def has_scope(self, scope: str) -> bool:
         return scope in self.scopes
+
+    @property
+    def key_class(self) -> str | None:
+        """"speaker" or "service" — derived, never stored, so an old key file
+        cannot disagree with the current partition."""
+        classes = {class_of_scope(s) for s in self.scopes}
+        return classes.pop() if len(classes) == 1 else None
 
 
 def _hash(raw_key: str) -> str:
@@ -59,6 +87,14 @@ class ApiKeyStore:
         if invalid or not clean:
             raise InvalidScopeError(
                 f"invalid scopes: {invalid or 'none given'}; valid: {sorted(VALID_SCOPES)}"
+            )
+        classes = {class_of_scope(s) for s in clean}
+        if len(classes) > 1:
+            raise InvalidScopeError(
+                "a key may not mix speaker and service scopes "
+                f"(speaker: {sorted(SPEAKER_SCOPES)}; service: {sorted(SERVICE_SCOPES)}). "
+                "Mint two keys instead — the split is what keeps a service key away "
+                "from personal data."
             )
         raw_key = KEY_PREFIX + secrets.token_urlsafe(32)
         record = {
