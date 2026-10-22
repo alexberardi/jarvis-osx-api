@@ -16,7 +16,7 @@ logger = logging.getLogger("uvicorn")
 
 from fastapi import FastAPI  # noqa: E402
 
-from api import contact_routes, health_routes, message_routes, shortcut_routes  # noqa: E402
+from api import contact_routes, health_routes, message_routes, ocr_routes, shortcut_routes  # noqa: E402
 from version import __version__  # noqa: E402
 
 app = FastAPI(title="Jarvis OSX API", version=__version__)
@@ -24,6 +24,7 @@ app.include_router(health_routes.router)
 app.include_router(message_routes.router)
 app.include_router(contact_routes.router)
 app.include_router(shortcut_routes.router)
+app.include_router(ocr_routes.router)
 
 
 def _init_service_config() -> None:
